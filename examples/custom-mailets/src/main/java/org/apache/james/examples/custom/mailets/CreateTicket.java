@@ -1,5 +1,6 @@
 package org.apache.james.examples.custom.mailets;
 
+import com.google.common.base.Strings;
 import org.apache.mailet.Mail;
 import org.apache.mailet.base.GenericMailet;
 import org.json.JSONArray;
@@ -16,6 +17,8 @@ import java.net.http.HttpResponse;
 
 public class CreateTicket extends GenericMailet {
     private static final Logger logger = LoggerFactory.getLogger(CreateTicket.class);
+
+    private String ticketServiceUrl;
     @Override
     public void service(Mail mail) throws MessagingException {
         logger.info("Custom mailet called: {}", mail);
@@ -40,7 +43,7 @@ public class CreateTicket extends GenericMailet {
 
     private void createTicket(Mail mail) throws MessagingException, IOException {
 
-        String uri = "http://localhost:8082/ticket/createTicket";
+        String uri = ticketServiceUrl;
 
 
         JSONObject jsonObject = new JSONObject();
@@ -72,6 +75,15 @@ public class CreateTicket extends GenericMailet {
             e.printStackTrace();
         }
         return response.body();
+    }
+
+    @Override
+    public void init() throws MessagingException {
+        ticketServiceUrl = getInitParameter("ticketServiceUrl");
+
+        if (Strings.isNullOrEmpty(ticketServiceUrl)) {
+            throw new MessagingException("'ticketServiceUrl' is compulsory");
+        }
     }
 
     @Override
