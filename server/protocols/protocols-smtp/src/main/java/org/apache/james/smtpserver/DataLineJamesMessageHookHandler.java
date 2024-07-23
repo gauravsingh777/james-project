@@ -36,6 +36,7 @@ import org.apache.james.protocols.api.Response;
 import org.apache.james.protocols.api.handler.ExtensibleHandler;
 import org.apache.james.protocols.api.handler.LineHandler;
 import org.apache.james.protocols.api.handler.WiringException;
+import org.apache.james.protocols.netty.CommandInjectionDetectedException;
 import org.apache.james.protocols.smtp.MailEnvelope;
 import org.apache.james.protocols.smtp.SMTPResponse;
 import org.apache.james.protocols.smtp.SMTPRetCode;
@@ -61,6 +62,22 @@ import com.google.common.collect.ImmutableList;
  */
 public class DataLineJamesMessageHookHandler implements DataLineFilter, ExtensibleHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(DataLineJamesMessageHookHandler.class);
+    public static final boolean DETECT_SMTP_SMUGGLING = System.getProperty("james.prevent.smtp.smuggling", "true").equals("true");
+
+    /*
+    SMTP smuggling: https://sec-consult.com/blog/detail/smtp-smuggling-spoofing-e-mails-worldwide/
+    Strict CRLF enforcement rationals: https://haraka.github.io/barelf
+     */
+    private static void detectSMTPSmuggling(byte[] line) {
+        if (DETECT_SMTP_SMUGGLING) {
+            if (line.length < 2
+                || line[line.length - 2] != '\r'
+                || line[line.length - 1] != '\n') {
+
+                throw new CommandInjectionDetectedException();
+            }
+        }
+    }
 
     private List<JamesMessageHook> messageHandlers;
 
@@ -70,11 +87,13 @@ public class DataLineJamesMessageHookHandler implements DataLineFilter, Extensib
 
     @Override
     public Response onLine(SMTPSession session, byte[] line, LineHandler<SMTPSession> next) {
+
         ExtendedSMTPSession extendedSMTPSession = (ExtendedSMTPSession) session;
         MimeMessageInputStreamSource mmiss = extendedSMTPSession.getMimeMessageWriter();
 
         try {
             OutputStream out = mmiss.getWritableOutputStream();
+            detectSMTPSmuggling(line);
 
             // 46 is "."
             // Stream terminated
@@ -84,14 +103,7 @@ public class DataLineJamesMessageHookHandler implements DataLineFilter, Extensib
                     out.flush();
                     out.close();
 
-                    List<MailAddress> recipientCollection = session.getAttachment(SMTPSession.RCPT_LIST, State.Transaction).orElse(ImmutableList.of());
-                    MaybeSender sender = session.getAttachment(SMTPSession.SENDER, State.Transaction).orElse(MaybeSender.nullSender());
-
-                    MailImpl mail = MailImpl.builder()
-                        .name(mailName)
-                        .sender(sender)
-                        .addRecipients(recipientCollection)
-                        .build();
+                    MailImpl mail = createMail(session, mailName);
 
                     // store mail in the session so we can be sure it get disposed later
                     session.setAttachment(SMTPConstants.MAIL, mail, State.Transaction);
@@ -127,10 +139,31 @@ public class DataLineJamesMessageHookHandler implements DataLineFilter, Extensib
         } catch (IOException e) {
             LifecycleUtil.dispose(mmiss);
             SMTPResponse response = new SMTPResponse(SMTPRetCode.LOCAL_ERROR, DSNStatus.getStatus(DSNStatus.TRANSIENT, DSNStatus.UNDEFINED_STATUS) + " Error processing message: " + e.getMessage());
+            response.setEndSession(true);
+            session.popLineHandler();
             LOGGER.error("Unknown error occurred while processing DATA.", e);
             return response;
+        } catch (CommandInjectionDetectedException e) {
+            LifecycleUtil.dispose(mmiss);
+            SMTPResponse response = new SMTPResponse(SMTPRetCode.SYNTAX_ERROR_COMMAND_UNRECOGNIZED, DSNStatus.getStatus(DSNStatus.PERMANENT, DSNStatus.UNDEFINED_STATUS) + " line delimiter must be CRLF");
+            response.setEndSession(true);
+            session.popLineHandler();
+            LOGGER.info("Use of CRLF, which might indicate SMTP smuggling attempt");
+            return response;
+
         }
         return null;
+    }
+
+    private static MailImpl createMail(SMTPSession session, String mailName) {
+        List<MailAddress> recipientCollection = session.getAttachment(SMTPSession.RCPT_LIST, State.Transaction).orElse(ImmutableList.of());
+        MaybeSender sender = session.getAttachment(SMTPSession.SENDER, State.Transaction).orElse(MaybeSender.nullSender());
+
+        return MailImpl.builder()
+            .name(mailName)
+            .sender(sender)
+            .addRecipients(recipientCollection)
+            .build();
     }
 
     protected Response processExtensions(SMTPSession session, Mail mail, MimeMessageInputStreamSource mmiss) {
