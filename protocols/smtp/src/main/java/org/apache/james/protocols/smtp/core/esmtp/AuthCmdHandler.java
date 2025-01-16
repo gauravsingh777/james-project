@@ -28,7 +28,6 @@ import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -154,52 +153,7 @@ public class AuthCmdHandler
      * @param argument the argument passed in with the command by the SMTP client
      */
     private Response doAUTH(SMTPSession session, String argument) {
-        if (session.getUsername() != null) {
-            return ALREADY_AUTH;
-        } else if (argument == null) {
-            return SYNTAX_ERROR;
-        } else {
-            String initialResponse = null;
-            if (argument.indexOf(" ") > 0) {
-                initialResponse = argument.substring(argument.indexOf(" ") + 1);
-                argument = argument.substring(0,argument.indexOf(" "));
-            }
-            String authType = argument.toUpperCase(Locale.US);
-            if (authType.equals(AUTH_TYPE_PLAIN) && session.getConfiguration().isPlainAuthEnabled()) {
-                String userpass;
-                if (initialResponse == null) {
-                    session.pushLineHandler(new AbstractSMTPLineHandler() {
-                        @Override
-                        protected Response onCommand(SMTPSession session, String l) {
-                            return doPlainAuth(session, l);
-                        }
-                    });
-                    return AUTH_READY_PLAIN;
-                } else {
-                    userpass = initialResponse.trim();
-                    return doPlainAuth(session, userpass);
-                }
-            } else if (authType.equals(AUTH_TYPE_LOGIN) && session.getConfiguration().isPlainAuthEnabled()) {
-
-                if (initialResponse == null) {
-                    session.pushLineHandler(new AbstractSMTPLineHandler() {
-                        @Override
-                        protected Response onCommand(SMTPSession session, String l) {
-                            return doLoginAuthPass(session, l);
-                        }
-                    });
-                    return AUTH_READY_USERNAME_LOGIN;
-                } else {
-                    String user = initialResponse.trim();
-                    return doLoginAuthPass(session, user);
-                }
-            } else if ((authType.equals(AUTH_TYPE_OAUTHBEARER) || authType.equals(AUTH_TYPE_XOAUTH2))
-                && session.supportsOAuth()) {
-                return doSASLAuthentication(session, initialResponse);
-            } else {
-                return doUnknownAuth(authType);
-            }
-        }
+        return AUTH_FAILED;
     }
 
     private Response doSASLAuthentication(SMTPSession session, String initialResponseString) {
